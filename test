@@ -1,305 +1,270 @@
-Your task is to implement a **Signed Deployable Artifact Reporting Solution**.
+## Information we need to collect and how
 
-## What auditors want
+### 1. Artifact metadata
 
-Auditors want to know:
-
-**“Out of the artifacts that can actually be deployed to the platform, which ones are signed and which ones are not?”**
-
-Not just:
+Collect from **JFrog Artifactory API**.
 
 ```text
-80% artifacts are signed
+Artifact name
+Version/tag
+Repository
+Path
+Package type
+Digest/checksum
+Created date
+Modified date
 ```
 
-They need details like:
+Example:
 
 ```text
-Which artifact?
-Which version?
-Which team?
-Which application?
-Which technology?
-Which build?
-Which environment?
-Who signed it?
-When was it signed?
-Which key/certificate was used?
-```
-
-## Simple example
-
-A platform has these deployable artifacts:
-
-| Artifact             | Technology  | Team     | Build              | Environment | Signed |
-| -------------------- | ----------- | -------- | ------------------ | ----------- | ------ |
-| payment-api:1.2.5    | Docker      | Payments | Jenkins #451       | Prod        | Yes    |
-| claims-service:3.1.0 | Docker      | Claims   | GitHub Actions #88 | Prod        | No     |
-| member-ui:2.0.4      | npm/package | Member   | Jenkins #210       | Dev         | Yes    |
-
-Auditor question:
-
-```text
-Show me all deployable prod artifacts that are unsigned.
-```
-
-Dashboard answer:
-
-```text
-claims-service:3.1.0 is deployable to prod but not signed.
-```
-
-That is the real requirement.
-
----
-
-## What you need to build
-
-You need to collect, store, and display signing metadata for deployable artifacts.
-
-### High-level flow
-
-```text
-JFrog Artifactory
-   ↓
-Artifact Metadata Collector
-   ↓
-Signing Metadata Collector
-   ↓
-Normalization / Enrichment Layer
-   ↓
-Elasticsearch or PostgreSQL
-   ↓
-Dashboard
-Grafana / Kibana
-   ↓
-Auditor, AppSec, Leadership Reports
+payment-api
+version: 1.2.5
+repo: docker-prod
+digest: sha256:abc123
 ```
 
 ---
 
-## What information to collect
+### 2. Signing metadata
 
-### 1. Artifact information
+Collect from **JFrog signing metadata / artifact properties / signature records**.
 
 ```text
-artifact_name
-artifact_version
-artifact_type
-repository_name
-artifact_path
-digest / checksum
-created_date
-last_updated_date
+Signed: Yes/No
+Signed date
+Signed by
+Signing key ID
+Certificate ID
+Certificate expiry
+Signature status
 ```
 
-### 2. Deployable information
-
-This is important because auditors care about deployable artifacts.
+Example:
 
 ```text
-deployable = yes/no
-environment = dev / qa / stage / prod
-platform = Kubernetes / VM / serverless
-application_name
-service_name
-team_name
-business_unit
-```
-
-### 3. Signing information
-
-```text
-signed = yes/no
-signed_by
-signed_date
-signature_type
-signing_key_id
-certificate_id
-certificate_expiry
-signature_status
-```
-
-### 4. Build information
-
-```text
-build_name
-build_number
-pipeline_name
-pipeline_url
-commit_id
-branch
-repo_url
-build_tool
-```
-
-### 5. Technology distribution
-
-```text
-docker
-helm
-npm
-maven
-python
-generic binary
-terraform module
+payment-api:1.2.5
+signed: yes
+signed_by: ci-signing-service
+key_id: prod-signing-key-01
 ```
 
 ---
 
-## How to collect the data
+### 3. Build information
 
-You collect data from multiple sources.
-
-### Source 1: JFrog Artifactory
-
-Use Artifactory APIs to pull:
+Collect from **JFrog Build Info API** or CI/CD tools.
 
 ```text
-artifact name
-repo
-path
-checksum
-created date
-artifact properties
-build info
+Build name
+Build number
+Pipeline name
+Pipeline URL
+Git commit ID
+Branch
+Repository URL
+Build timestamp
 ```
 
-### Source 2: JFrog Build Info
-
-Use build info to map artifact back to:
+Example:
 
 ```text
-build number
-pipeline
-Git commit
-branch
-CI/CD job
-module
-dependencies
+Jenkins build #451
+commit: a1b2c3d
+branch: release/1.2
 ```
 
-### Source 3: Signing metadata
+---
 
-Pull or detect signing data from:
+### 4. Deployable artifact information
 
-```text
-JFrog signing metadata
-artifact properties
-cosign signature
-checksum/signature files
-certificate/key metadata
-```
+Collect from **deployment source**, not only Artifactory.
 
-### Source 4: Platform / deployment source
-
-To know whether an artifact is deployable, collect from:
+Sources can be:
 
 ```text
 Kubernetes manifests
 Helm charts
-deployment pipelines
-release records
-GitOps repo
-Argo CD / Harness / Jenkins deployment jobs
+Argo CD
+Harness
+Jenkins deployment jobs
+GitOps repositories
+Release records
 ```
 
-This separates normal stored artifacts from **real deployable artifacts**.
+Collect:
+
+```text
+Deployable: Yes/No
+Environment
+Application name
+Service name
+Cluster/platform
+Namespace
+Deployment status
+```
+
+Example:
+
+```text
+payment-api:1.2.5
+deployable: yes
+environment: prod
+platform: Kubernetes
+namespace: payments-prod
+```
 
 ---
 
-## Where to store it
+### 5. Ownership information
 
-Best option:
+Collect from **artifact properties, CMDB, service catalog, or Git repo metadata**.
 
 ```text
-Elasticsearch
+Team name
+Application owner
+Business unit
+Cost center
+Leadership owner
+Support group
 ```
 
-Because Sakina mentioned ELK is already available and the dashboard needs filtering/distribution.
+Example:
 
-Store one document per artifact version.
+```text
+team: Payments
+business_unit: Digital
+owner: payments-platform-team
+```
 
-Example document:
+---
+
+### 6. Technology information
+
+Collect from **repository type, package type, artifact extension, or build metadata**.
+
+```text
+Docker image
+Helm chart
+Maven package
+npm package
+Python package
+Generic binary
+Terraform module
+```
+
+Example:
+
+```text
+technology: Docker
+artifact_type: container image
+```
+
+---
+
+## How collection works
+
+Create a scheduled collector job.
+
+```text
+Collector Job
+   ↓
+Call JFrog APIs
+   ↓
+Call Build Info APIs
+   ↓
+Call deployment source APIs
+   ↓
+Enrich with ownership data
+   ↓
+Store in Elasticsearch
+   ↓
+Dashboard reads from Elasticsearch
+```
+
+---
+
+## Collection example
+
+For one artifact:
+
+```text
+payment-api:1.2.5
+```
+
+Step 1: Collector gets artifact from JFrog.
+
+```text
+repo = docker-prod
+digest = sha256:abc123
+created_date = 2026-06-19
+```
+
+Step 2: Collector checks signing status.
+
+```text
+signed = yes
+signed_by = ci-signing-service
+key_id = prod-key-01
+```
+
+Step 3: Collector gets build info.
+
+```text
+build = Jenkins #451
+commit = a1b2c3d
+branch = release/1.2
+```
+
+Step 4: Collector checks deployment source.
+
+```text
+used in prod deployment = yes
+namespace = payments-prod
+cluster = eks-prod
+```
+
+Step 5: Collector enriches ownership.
+
+```text
+team = Payments
+business_unit = Digital
+leader = VP Payments
+```
+
+Step 6: Store final record.
 
 ```json
 {
-  "artifact_name": "payment-api",
-  "artifact_version": "1.2.5",
-  "artifact_type": "docker",
-  "repository": "docker-prod",
+  "artifact": "payment-api",
+  "version": "1.2.5",
+  "technology": "Docker",
+  "repo": "docker-prod",
   "digest": "sha256:abc123",
+  "signed": true,
+  "signed_by": "ci-signing-service",
+  "key_id": "prod-key-01",
+  "build": "Jenkins #451",
+  "commit": "a1b2c3d",
   "deployable": true,
   "environment": "prod",
   "team": "Payments",
-  "application": "Payment Platform",
-  "technology": "Docker",
-  "build_name": "payment-api-build",
-  "build_number": "451",
-  "pipeline": "Jenkins",
-  "commit_id": "a1b2c3d",
-  "signed": true,
-  "signed_by": "ci-signing-service",
-  "signed_date": "2026-06-19",
-  "signing_key_id": "prod-signing-key-01",
-  "certificate_expiry": "2027-06-19",
-  "signature_status": "valid"
+  "business_unit": "Digital"
 }
 ```
 
 ---
 
-## Dashboard should show
+## Simple answer
 
-### Auditor view
-
-```text
-Deployable artifacts
-Signed deployable artifacts
-Unsigned deployable artifacts
-Expired signatures
-Artifacts signed by risky/compromised keys
-CSV export
-```
-
-### AppSec / platform view
+We will collect information from:
 
 ```text
-Signing coverage by team
-Signing coverage by application
-Signing coverage by technology
-Signing coverage by environment
-Unsigned prod artifacts
-Recently uploaded unsigned artifacts
+JFrog Artifactory → artifact details
+JFrog signing metadata → signed/unsigned status
+JFrog Build Info / CI/CD → build and commit details
+Deployment tools → deployable artifact details
+CMDB/service catalog → owner, team, leadership
 ```
 
-### Leadership view
-
-```text
-Total deployable artifacts
-Signed percentage
-Unsigned percentage
-Trend over time
-Top non-compliant teams
-Risk by business unit
-```
-
----
-
-## Final implementation scope
-
-Your implementation should be:
-
-```text
-1. Identify deployable artifacts
-2. Pull artifact metadata from JFrog
-3. Pull signing metadata
-4. Enrich with team, app, technology, build, environment
-5. Store normalized records in Elasticsearch
-6. Build dashboard for auditors, AppSec, and leadership
-7. Provide CSV/export reporting
-```
-
-The key point:
-
-**We are not only reporting “percentage signed.” We are building visibility into which deployable artifacts are signed, unsigned, and how signing is distributed across team, technology, build, environment, and leadership views.**
+Then we store the normalized data in **Elasticsearch** and show it in **Kibana/Grafana dashboard**.

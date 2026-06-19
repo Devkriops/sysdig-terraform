@@ -1,42 +1,305 @@
-Introduction
-Compliance & Governance Reporting for Signed Artifacts
+Your task is to implement a **Signed Deployable Artifact Reporting Solution**.
 
-As part of the organization's Software Supply Chain Security initiative, artifact signing has been implemented to ensure the authenticity and integrity of deployable software artifacts stored within JFrog Artifactory. Artifact signing helps verify that artifacts originate from trusted sources and have not been modified after creation.
+## What auditors want
 
-While the signing capability is already in place, there is currently no centralized reporting mechanism that provides visibility into which deployable artifacts are signed, where they are stored, and the overall signing compliance across repositories, teams, and environments.
+Auditors want to know:
 
-This creates challenges for auditors, security teams, and platform engineering teams when attempting to answer key governance and compliance questions such as:
+**“Out of the artifacts that can actually be deployed to the platform, which ones are signed and which ones are not?”**
 
-Which deployable artifacts are signed?
-Which artifacts remain unsigned?
-What percentage of deployable artifacts are currently signed?
-Which repositories or teams have the highest or lowest signing compliance?
-How can signing compliance be tracked over time?
-Where can auditors obtain evidence of artifact signing for compliance reviews?
+Not just:
 
-Currently, artifact signing metadata exists within JFrog Artifactory; however, the information is not aggregated into a centralized reporting platform, making governance reporting difficult and largely manual.
+```text
+80% artifacts are signed
+```
 
-Problem Statement
+They need details like:
 
-The organization requires a solution that can collect, aggregate, and report artifact signing information for deployable artifacts across Artifactory repositories. The solution should provide centralized visibility into signing compliance, support audit requirements, and enable dashboards that present signing metrics and trends to security, compliance, and leadership stakeholders.
+```text
+Which artifact?
+Which version?
+Which team?
+Which application?
+Which technology?
+Which build?
+Which environment?
+Who signed it?
+When was it signed?
+Which key/certificate was used?
+```
 
-Objective
+## Simple example
 
-The objective of this design is to define an architecture for:
+A platform has these deployable artifacts:
 
-Identifying deployable artifacts stored in Artifactory.
-Collecting artifact signing metadata from Artifactory.
-Aggregating and storing the metadata in a reporting platform.
-Calculating signing compliance metrics and percentages.
-Providing dashboards and reports for auditors, security teams, and leadership.
-Establishing a scalable foundation for future software supply chain governance initiatives.
-Scope of This Design
+| Artifact             | Technology  | Team     | Build              | Environment | Signed |
+| -------------------- | ----------- | -------- | ------------------ | ----------- | ------ |
+| payment-api:1.2.5    | Docker      | Payments | Jenkins #451       | Prod        | Yes    |
+| claims-service:3.1.0 | Docker      | Claims   | GitHub Actions #88 | Prod        | No     |
+| member-ui:2.0.4      | npm/package | Member   | Jenkins #210       | Dev         | Yes    |
 
-This document focuses on the reporting and governance aspects of artifact signing, specifically:
+Auditor question:
 
-Collection of signed artifact metadata.
-Aggregation and storage of signing information.
-Compliance reporting and dashboards.
-Audit visibility and governance metrics.
+```text
+Show me all deployable prod artifacts that are unsigned.
+```
 
-This design does not modify the existing artifact signing process itself and does not address private key compromise mitigation, which is being handled as a separate initiative.
+Dashboard answer:
+
+```text
+claims-service:3.1.0 is deployable to prod but not signed.
+```
+
+That is the real requirement.
+
+---
+
+## What you need to build
+
+You need to collect, store, and display signing metadata for deployable artifacts.
+
+### High-level flow
+
+```text
+JFrog Artifactory
+   ↓
+Artifact Metadata Collector
+   ↓
+Signing Metadata Collector
+   ↓
+Normalization / Enrichment Layer
+   ↓
+Elasticsearch or PostgreSQL
+   ↓
+Dashboard
+Grafana / Kibana
+   ↓
+Auditor, AppSec, Leadership Reports
+```
+
+---
+
+## What information to collect
+
+### 1. Artifact information
+
+```text
+artifact_name
+artifact_version
+artifact_type
+repository_name
+artifact_path
+digest / checksum
+created_date
+last_updated_date
+```
+
+### 2. Deployable information
+
+This is important because auditors care about deployable artifacts.
+
+```text
+deployable = yes/no
+environment = dev / qa / stage / prod
+platform = Kubernetes / VM / serverless
+application_name
+service_name
+team_name
+business_unit
+```
+
+### 3. Signing information
+
+```text
+signed = yes/no
+signed_by
+signed_date
+signature_type
+signing_key_id
+certificate_id
+certificate_expiry
+signature_status
+```
+
+### 4. Build information
+
+```text
+build_name
+build_number
+pipeline_name
+pipeline_url
+commit_id
+branch
+repo_url
+build_tool
+```
+
+### 5. Technology distribution
+
+```text
+docker
+helm
+npm
+maven
+python
+generic binary
+terraform module
+```
+
+---
+
+## How to collect the data
+
+You collect data from multiple sources.
+
+### Source 1: JFrog Artifactory
+
+Use Artifactory APIs to pull:
+
+```text
+artifact name
+repo
+path
+checksum
+created date
+artifact properties
+build info
+```
+
+### Source 2: JFrog Build Info
+
+Use build info to map artifact back to:
+
+```text
+build number
+pipeline
+Git commit
+branch
+CI/CD job
+module
+dependencies
+```
+
+### Source 3: Signing metadata
+
+Pull or detect signing data from:
+
+```text
+JFrog signing metadata
+artifact properties
+cosign signature
+checksum/signature files
+certificate/key metadata
+```
+
+### Source 4: Platform / deployment source
+
+To know whether an artifact is deployable, collect from:
+
+```text
+Kubernetes manifests
+Helm charts
+deployment pipelines
+release records
+GitOps repo
+Argo CD / Harness / Jenkins deployment jobs
+```
+
+This separates normal stored artifacts from **real deployable artifacts**.
+
+---
+
+## Where to store it
+
+Best option:
+
+```text
+Elasticsearch
+```
+
+Because Sakina mentioned ELK is already available and the dashboard needs filtering/distribution.
+
+Store one document per artifact version.
+
+Example document:
+
+```json
+{
+  "artifact_name": "payment-api",
+  "artifact_version": "1.2.5",
+  "artifact_type": "docker",
+  "repository": "docker-prod",
+  "digest": "sha256:abc123",
+  "deployable": true,
+  "environment": "prod",
+  "team": "Payments",
+  "application": "Payment Platform",
+  "technology": "Docker",
+  "build_name": "payment-api-build",
+  "build_number": "451",
+  "pipeline": "Jenkins",
+  "commit_id": "a1b2c3d",
+  "signed": true,
+  "signed_by": "ci-signing-service",
+  "signed_date": "2026-06-19",
+  "signing_key_id": "prod-signing-key-01",
+  "certificate_expiry": "2027-06-19",
+  "signature_status": "valid"
+}
+```
+
+---
+
+## Dashboard should show
+
+### Auditor view
+
+```text
+Deployable artifacts
+Signed deployable artifacts
+Unsigned deployable artifacts
+Expired signatures
+Artifacts signed by risky/compromised keys
+CSV export
+```
+
+### AppSec / platform view
+
+```text
+Signing coverage by team
+Signing coverage by application
+Signing coverage by technology
+Signing coverage by environment
+Unsigned prod artifacts
+Recently uploaded unsigned artifacts
+```
+
+### Leadership view
+
+```text
+Total deployable artifacts
+Signed percentage
+Unsigned percentage
+Trend over time
+Top non-compliant teams
+Risk by business unit
+```
+
+---
+
+## Final implementation scope
+
+Your implementation should be:
+
+```text
+1. Identify deployable artifacts
+2. Pull artifact metadata from JFrog
+3. Pull signing metadata
+4. Enrich with team, app, technology, build, environment
+5. Store normalized records in Elasticsearch
+6. Build dashboard for auditors, AppSec, and leadership
+7. Provide CSV/export reporting
+```
+
+The key point:
+
+**We are not only reporting “percentage signed.” We are building visibility into which deployable artifacts are signed, unsigned, and how signing is distributed across team, technology, build, environment, and leadership views.**

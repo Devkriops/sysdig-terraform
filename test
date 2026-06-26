@@ -1,270 +1,59 @@
-## Information we need to collect and how
+For Docker only, change your script like this:
 
-### 1. Artifact metadata
-
-Collect from **JFrog Artifactory API**.
+### Docker inclusion rule
 
 ```text
-Artifact name
-Version/tag
-Repository
-Path
-Package type
-Digest/checksum
-Created date
-Modified date
+Include only:
+1. list.manifest.json  → GitHub Actions multi-arch image
+2. manifest.json       → Jenkins/single-arch image, only when list.manifest.json is not present
 ```
 
-Example:
+Exclude everything else:
 
 ```text
-payment-api
-version: 1.2.5
-repo: docker-prod
-digest: sha256:abc123
+layers
+sha256 folders
+architecture folders
+config files
+other manifest files under arch folders
 ```
 
----
+### Logic
 
-### 2. Signing metadata
+```python
+def is_docker_deployable_artifact(path, all_paths_for_image):
+    file_name = path.split("/")[-1]
 
-Collect from **JFrog signing metadata / artifact properties / signature records**.
+    # Multi-arch image: count only list.manifest.json
+    if "list.manifest.json" in all_paths_for_image:
+        return file_name == "list.manifest.json"
+
+    # Single-arch image: count only top-level manifest.json
+    if file_name == "manifest.json":
+        return True
+
+    return False
+```
+
+### What your script should do
 
 ```text
-Signed: Yes/No
-Signed date
-Signed by
-Signing key ID
-Certificate ID
-Certificate expiry
-Signature status
+1. Pull Docker artifact paths from Artifactory
+2. Group paths by image repo + image tag
+3. For each image tag:
+   - If list.manifest.json exists:
+       include only list.manifest.json
+   - Else:
+       include only top-level manifest.json
+4. Check JFrog evidence only for that selected file
+5. Store result:
+   image_name
+   image_tag
+   selected_manifest_path
+   manifest_type = multi_arch or single_arch
+   signed = true/false
 ```
 
-Example:
+### Simple meeting explanation
 
-```text
-payment-api:1.2.5
-signed: yes
-signed_by: ci-signing-service
-key_id: prod-signing-key-01
-```
-
----
-
-### 3. Build information
-
-Collect from **JFrog Build Info API** or CI/CD tools.
-
-```text
-Build name
-Build number
-Pipeline name
-Pipeline URL
-Git commit ID
-Branch
-Repository URL
-Build timestamp
-```
-
-Example:
-
-```text
-Jenkins build #451
-commit: a1b2c3d
-branch: release/1.2
-```
-
----
-
-### 4. Deployable artifact information
-
-Collect from **deployment source**, not only Artifactory.
-
-Sources can be:
-
-```text
-Kubernetes manifests
-Helm charts
-Argo CD
-Harness
-Jenkins deployment jobs
-GitOps repositories
-Release records
-```
-
-Collect:
-
-```text
-Deployable: Yes/No
-Environment
-Application name
-Service name
-Cluster/platform
-Namespace
-Deployment status
-```
-
-Example:
-
-```text
-payment-api:1.2.5
-deployable: yes
-environment: prod
-platform: Kubernetes
-namespace: payments-prod
-```
-
----
-
-### 5. Ownership information
-
-Collect from **artifact properties, CMDB, service catalog, or Git repo metadata**.
-
-```text
-Team name
-Application owner
-Business unit
-Cost center
-Leadership owner
-Support group
-```
-
-Example:
-
-```text
-team: Payments
-business_unit: Digital
-owner: payments-platform-team
-```
-
----
-
-### 6. Technology information
-
-Collect from **repository type, package type, artifact extension, or build metadata**.
-
-```text
-Docker image
-Helm chart
-Maven package
-npm package
-Python package
-Generic binary
-Terraform module
-```
-
-Example:
-
-```text
-technology: Docker
-artifact_type: container image
-```
-
----
-
-## How collection works
-
-Create a scheduled collector job.
-
-```text
-Collector Job
-   ↓
-Call JFrog APIs
-   ↓
-Call Build Info APIs
-   ↓
-Call deployment source APIs
-   ↓
-Enrich with ownership data
-   ↓
-Store in Elasticsearch
-   ↓
-Dashboard reads from Elasticsearch
-```
-
----
-
-## Collection example
-
-For one artifact:
-
-```text
-payment-api:1.2.5
-```
-
-Step 1: Collector gets artifact from JFrog.
-
-```text
-repo = docker-prod
-digest = sha256:abc123
-created_date = 2026-06-19
-```
-
-Step 2: Collector checks signing status.
-
-```text
-signed = yes
-signed_by = ci-signing-service
-key_id = prod-key-01
-```
-
-Step 3: Collector gets build info.
-
-```text
-build = Jenkins #451
-commit = a1b2c3d
-branch = release/1.2
-```
-
-Step 4: Collector checks deployment source.
-
-```text
-used in prod deployment = yes
-namespace = payments-prod
-cluster = eks-prod
-```
-
-Step 5: Collector enriches ownership.
-
-```text
-team = Payments
-business_unit = Digital
-leader = VP Payments
-```
-
-Step 6: Store final record.
-
-```json
-{
-  "artifact": "payment-api",
-  "version": "1.2.5",
-  "technology": "Docker",
-  "repo": "docker-prod",
-  "digest": "sha256:abc123",
-  "signed": true,
-  "signed_by": "ci-signing-service",
-  "key_id": "prod-key-01",
-  "build": "Jenkins #451",
-  "commit": "a1b2c3d",
-  "deployable": true,
-  "environment": "prod",
-  "team": "Payments",
-  "business_unit": "Digital"
-}
-```
-
----
-
-## Simple answer
-
-We will collect information from:
-
-```text
-JFrog Artifactory → artifact details
-JFrog signing metadata → signed/unsigned status
-JFrog Build Info / CI/CD → build and commit details
-Deployment tools → deployable artifact details
-CMDB/service catalog → owner, team, leadership
-```
-
-Then we store the normalized data in **Elasticsearch** and show it in **Kibana/Grafana dashboard**.
+> For Docker, I will not check every file under the image path. I will group artifacts by image tag, then select only the deployable manifest. If `list.manifest.json` exists, I will treat that as the deployable artifact for multi-arch images. If not, I will use the top-level `manifest.json` for single-arch images. All layers and architecture-specific files will be excluded from the signing percentage.
